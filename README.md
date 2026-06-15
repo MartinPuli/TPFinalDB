@@ -1,6 +1,6 @@
 # TP Final — Base de Datos · Aerolínea Low Cost
 
-Trabajo Práctico Obligatorio — **Grupo 6**.
+Trabajos Prácticos Obligatorios — **Grupo 6**.
 Dominio elegido: **funcionamiento de una aerolínea low cost** dedicada a la
 comercialización de vuelos de pasajeros a través de una plataforma digital.
 
@@ -8,7 +8,26 @@ El sistema registra la venta de pasajes y la relación entre **pasajeros,
 reservas, vuelos, pagos, servicios contratados, asientos, check-in, aeronaves,
 rutas, aeropuertos y empleados** asignados a cada vuelo.
 
+## Datos de la entrega
+
+> **Materia:** _________________________  **Comisión:** ___________
+> **Docente:** _________________________  **Fecha de entrega:** ___/___/______
+> **Grupo:** 6
+> **Integrantes:** ______________________________________________________
+>
+> *(Completar estos datos antes de entregar.)*
+
 ## Contenido del repositorio
+
+Este repositorio cubre los dos trabajos prácticos obligatorios:
+
+### TPO Nro 1 — Investigación y muestreo bibliográfico
+
+| Archivo | Descripción |
+|---|---|
+| [`docs/TPO1_investigacion_bdoo.md`](docs/TPO1_investigacion_bdoo.md) | Trabajo de investigación sobre **bases de datos orientadas a objetos**, con comparación contra el modelo relacional, aplicación al dominio y bibliografía. |
+
+### TPO Nro 2 — Modelo de datos del sistema de información
 
 | Archivo | Descripción |
 |---|---|
