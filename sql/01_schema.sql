@@ -1,8 +1,9 @@
 -- ============================================================
 -- TP Final - Base de Datos
 -- Dominio: Aerolinea Low Cost (Grupo 6)
--- Motor: MySQL 8.0+
--- Archivo: esquema (DDL) - tablas, constraints y triggers
+-- Motor: MySQL 8.0+  (compatible con MariaDB 10.4+)
+-- Archivo: esquema (DDL) - tablas, restricciones, indices,
+--          funcion auxiliar y triggers de integridad.
 -- ============================================================
 
 DROP DATABASE IF EXISTS aerolinea_lowcost;
@@ -61,7 +62,8 @@ CREATE TABLE asiento (
                      NOT NULL DEFAULT 'comun',
   PRIMARY KEY (id_asiento),
   CONSTRAINT uq_asiento UNIQUE (matricula_aeronave, fila, letra),
-  CONSTRAINT fk_asiento_aeronave FOREIGN KEY (matricula_aeronave) REFERENCES aeronave (matricula),
+  CONSTRAINT fk_asiento_aeronave FOREIGN KEY (matricula_aeronave)
+             REFERENCES aeronave (matricula) ON DELETE CASCADE,
   CONSTRAINT chk_asiento_fila CHECK (fila > 0)
 ) ENGINE=InnoDB;
 
@@ -82,7 +84,11 @@ CREATE TABLE vuelo (
   CONSTRAINT uq_vuelo UNIQUE (numero_vuelo, fecha_hora_salida),
   CONSTRAINT fk_vuelo_ruta     FOREIGN KEY (id_ruta)            REFERENCES ruta (id_ruta),
   CONSTRAINT fk_vuelo_aeronave FOREIGN KEY (matricula_aeronave) REFERENCES aeronave (matricula),
-  CONSTRAINT chk_vuelo_precio  CHECK (precio_base >= 0)
+  CONSTRAINT chk_vuelo_precio  CHECK (precio_base >= 0),
+  -- La llegada, si se conoce, debe ser posterior a la salida.
+  CONSTRAINT chk_vuelo_fechas  CHECK (fecha_hora_llegada IS NULL
+                                      OR fecha_hora_llegada > fecha_hora_salida),
+  INDEX idx_vuelo_salida (fecha_hora_salida)
 ) ENGINE=InnoDB;
 
 -- ------------------------------------------------------------
@@ -104,7 +110,7 @@ CREATE TABLE vuelo_empleado (
   legajo   INT NOT NULL,
   funcion  ENUM('piloto','copiloto','tripulante_cabina') NOT NULL,
   PRIMARY KEY (id_vuelo, legajo),
-  CONSTRAINT fk_ve_vuelo    FOREIGN KEY (id_vuelo) REFERENCES vuelo (id_vuelo),
+  CONSTRAINT fk_ve_vuelo    FOREIGN KEY (id_vuelo) REFERENCES vuelo (id_vuelo) ON DELETE CASCADE,
   CONSTRAINT fk_ve_empleado FOREIGN KEY (legajo)   REFERENCES empleado (legajo)
 ) ENGINE=InnoDB;
 
@@ -122,6 +128,9 @@ CREATE TABLE pasajero (
 
 -- ------------------------------------------------------------
 -- RESERVA  (operacion de compra de un pasajero titular)
+-- monto_total es un valor DERIVADO (suma de pasajes + servicios no
+-- cancelados); se mantiene automaticamente por triggers, por eso se
+-- inicializa en 0 y no debe cargarse a mano.
 -- ------------------------------------------------------------
 CREATE TABLE reserva (
   id_reserva          INT          NOT NULL AUTO_INCREMENT,
@@ -155,11 +164,14 @@ CREATE TABLE pasaje (
   -- Un asiento no puede asignarse dos veces dentro del mismo vuelo.
   -- (MySQL permite multiples NULL, por lo que varios pasajes sin asiento son validos.)
   CONSTRAINT uq_pasaje_asiento_vuelo UNIQUE (id_vuelo, id_asiento),
-  CONSTRAINT fk_pasaje_reserva  FOREIGN KEY (id_reserva)  REFERENCES reserva (id_reserva),
+  -- Un mismo pasajero no puede tener mas de un pasaje en el mismo vuelo.
+  CONSTRAINT uq_pasaje_pasajero_vuelo UNIQUE (id_vuelo, id_pasajero),
+  CONSTRAINT fk_pasaje_reserva  FOREIGN KEY (id_reserva)  REFERENCES reserva (id_reserva) ON DELETE CASCADE,
   CONSTRAINT fk_pasaje_pasajero FOREIGN KEY (id_pasajero) REFERENCES pasajero (id_pasajero),
   CONSTRAINT fk_pasaje_vuelo    FOREIGN KEY (id_vuelo)    REFERENCES vuelo (id_vuelo),
   CONSTRAINT fk_pasaje_asiento  FOREIGN KEY (id_asiento)  REFERENCES asiento (id_asiento),
-  CONSTRAINT chk_pasaje_precio  CHECK (precio_base >= 0)
+  CONSTRAINT chk_pasaje_precio  CHECK (precio_base >= 0),
+  INDEX idx_pasaje_vuelo_estado (id_vuelo, estado)
 ) ENGINE=InnoDB;
 
 -- ------------------------------------------------------------
@@ -184,7 +196,7 @@ CREATE TABLE pasaje_servicio (
   cantidad        INT NOT NULL DEFAULT 1,
   precio_aplicado DECIMAL(10,2) NOT NULL,
   PRIMARY KEY (id_pasaje, id_servicio),
-  CONSTRAINT fk_ps_pasaje   FOREIGN KEY (id_pasaje)   REFERENCES pasaje (id_pasaje),
+  CONSTRAINT fk_ps_pasaje   FOREIGN KEY (id_pasaje)   REFERENCES pasaje (id_pasaje) ON DELETE CASCADE,
   CONSTRAINT fk_ps_servicio FOREIGN KEY (id_servicio) REFERENCES servicio_adicional (id_servicio),
   CONSTRAINT chk_ps_cantidad CHECK (cantidad > 0),
   CONSTRAINT chk_ps_precio   CHECK (precio_aplicado >= 0)
@@ -200,7 +212,7 @@ CREATE TABLE checkin (
   tarjeta_embarque VARCHAR(30) NOT NULL,
   PRIMARY KEY (id_checkin),
   CONSTRAINT uq_checkin_pasaje UNIQUE (id_pasaje),
-  CONSTRAINT fk_checkin_pasaje FOREIGN KEY (id_pasaje) REFERENCES pasaje (id_pasaje)
+  CONSTRAINT fk_checkin_pasaje FOREIGN KEY (id_pasaje) REFERENCES pasaje (id_pasaje) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 -- ------------------------------------------------------------
@@ -215,19 +227,49 @@ CREATE TABLE pago (
   estado     ENUM('pendiente','aprobado','rechazado') NOT NULL DEFAULT 'pendiente',
   fecha      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id_pago),
-  CONSTRAINT fk_pago_reserva FOREIGN KEY (id_reserva) REFERENCES reserva (id_reserva),
-  CONSTRAINT chk_pago_monto CHECK (monto > 0)
+  CONSTRAINT fk_pago_reserva FOREIGN KEY (id_reserva) REFERENCES reserva (id_reserva) ON DELETE CASCADE,
+  CONSTRAINT chk_pago_monto CHECK (monto > 0),
+  INDEX idx_pago_reserva_estado (id_reserva, estado)
 ) ENGINE=InnoDB;
 
 -- ============================================================
--- TRIGGERS
+-- FUNCION AUXILIAR Y TRIGGERS
 -- ============================================================
--- Regla: la cantidad de pasajes activos de un vuelo no puede superar la
--- capacidad de la aeronave asignada. Ademas, si se asigna un asiento, este
--- debe pertenecer a la aeronave que opera el vuelo.
 DELIMITER $$
 
-CREATE TRIGGER trg_pasaje_capacidad_bi
+-- ------------------------------------------------------------
+-- fn_total_reserva: monto total de una reserva = suma de los
+-- pasajes NO cancelados + suma de sus servicios contratados.
+-- Es la fuente de verdad de reserva.monto_total.
+-- ------------------------------------------------------------
+CREATE FUNCTION fn_total_reserva(p_id_reserva INT)
+RETURNS DECIMAL(12,2)
+READS SQL DATA
+BEGIN
+  DECLARE v_pasajes   DECIMAL(12,2);
+  DECLARE v_servicios DECIMAL(12,2);
+
+  SELECT COALESCE(SUM(precio_base), 0) INTO v_pasajes
+  FROM   pasaje
+  WHERE  id_reserva = p_id_reserva
+    AND  estado <> 'cancelado';
+
+  SELECT COALESCE(SUM(ps.cantidad * ps.precio_aplicado), 0) INTO v_servicios
+  FROM   pasaje_servicio ps
+  JOIN   pasaje p ON p.id_pasaje = ps.id_pasaje
+  WHERE  p.id_reserva = p_id_reserva
+    AND  p.estado <> 'cancelado';
+
+  RETURN v_pasajes + v_servicios;
+END$$
+
+-- ------------------------------------------------------------
+-- Capacidad y validacion de asiento al INSERTAR un pasaje.
+-- Regla: los pasajes activos de un vuelo no pueden superar la
+-- capacidad de la aeronave. Si se asigna asiento, debe pertenecer
+-- a la aeronave que opera el vuelo.
+-- ------------------------------------------------------------
+CREATE TRIGGER trg_pasaje_bi
 BEFORE INSERT ON pasaje
 FOR EACH ROW
 BEGIN
@@ -235,35 +277,38 @@ BEGIN
   DECLARE v_ocupados  INT;
   DECLARE v_matricula VARCHAR(10);
 
-  -- Solo cuentan los pasajes "activos" (no cancelados).
-  IF NEW.estado IN ('reservado','confirmado','utilizado') THEN
-    SELECT a.capacidad_maxima, a.matricula
-      INTO v_capacidad, v_matricula
-    FROM vuelo v
-    JOIN aeronave a ON a.matricula = v.matricula_aeronave
-    WHERE v.id_vuelo = NEW.id_vuelo;
+  SELECT a.capacidad_maxima, a.matricula
+    INTO v_capacidad, v_matricula
+  FROM vuelo v
+  JOIN aeronave a ON a.matricula = v.matricula_aeronave
+  WHERE v.id_vuelo = NEW.id_vuelo;
 
+  -- El asiento, si se indica, debe pertenecer a la aeronave del vuelo.
+  IF NEW.id_asiento IS NOT NULL
+     AND (SELECT matricula_aeronave FROM asiento WHERE id_asiento = NEW.id_asiento) <> v_matricula THEN
+    SIGNAL SQLSTATE '45000'
+      SET MESSAGE_TEXT = 'El asiento asignado no pertenece a la aeronave que opera el vuelo.';
+  END IF;
+
+  -- Solo los pasajes activos (no cancelados) ocupan capacidad.
+  IF NEW.estado IN ('reservado','confirmado','utilizado') THEN
     SELECT COUNT(*) INTO v_ocupados
-    FROM pasaje p
-    WHERE p.id_vuelo = NEW.id_vuelo
-      AND p.estado IN ('reservado','confirmado','utilizado');
+    FROM pasaje
+    WHERE id_vuelo = NEW.id_vuelo
+      AND estado IN ('reservado','confirmado','utilizado');
 
     IF v_ocupados + 1 > v_capacidad THEN
       SIGNAL SQLSTATE '45000'
         SET MESSAGE_TEXT = 'No se puede vender el pasaje: se supera la capacidad de la aeronave del vuelo.';
     END IF;
-
-    -- El asiento, si se indica, debe pertenecer a la aeronave del vuelo.
-    IF NEW.id_asiento IS NOT NULL THEN
-      IF (SELECT matricula_aeronave FROM asiento WHERE id_asiento = NEW.id_asiento) <> v_matricula THEN
-        SIGNAL SQLSTATE '45000'
-          SET MESSAGE_TEXT = 'El asiento asignado no pertenece a la aeronave que opera el vuelo.';
-      END IF;
-    END IF;
   END IF;
 END$$
 
-CREATE TRIGGER trg_pasaje_capacidad_bu
+-- ------------------------------------------------------------
+-- Misma validacion al ACTUALIZAR un pasaje (excluye su propia fila
+-- del conteo para no contarse dos veces).
+-- ------------------------------------------------------------
+CREATE TRIGGER trg_pasaje_bu
 BEFORE UPDATE ON pasaje
 FOR EACH ROW
 BEGIN
@@ -271,30 +316,109 @@ BEGIN
   DECLARE v_ocupados  INT;
   DECLARE v_matricula VARCHAR(10);
 
-  IF NEW.estado IN ('reservado','confirmado','utilizado') THEN
-    SELECT a.capacidad_maxima, a.matricula
-      INTO v_capacidad, v_matricula
-    FROM vuelo v
-    JOIN aeronave a ON a.matricula = v.matricula_aeronave
-    WHERE v.id_vuelo = NEW.id_vuelo;
+  SELECT a.capacidad_maxima, a.matricula
+    INTO v_capacidad, v_matricula
+  FROM vuelo v
+  JOIN aeronave a ON a.matricula = v.matricula_aeronave
+  WHERE v.id_vuelo = NEW.id_vuelo;
 
-    -- Se excluye el propio pasaje del conteo.
+  IF NEW.id_asiento IS NOT NULL
+     AND (SELECT matricula_aeronave FROM asiento WHERE id_asiento = NEW.id_asiento) <> v_matricula THEN
+    SIGNAL SQLSTATE '45000'
+      SET MESSAGE_TEXT = 'El asiento asignado no pertenece a la aeronave que opera el vuelo.';
+  END IF;
+
+  IF NEW.estado IN ('reservado','confirmado','utilizado') THEN
     SELECT COUNT(*) INTO v_ocupados
-    FROM pasaje p
-    WHERE p.id_vuelo = NEW.id_vuelo
-      AND p.id_pasaje <> NEW.id_pasaje
-      AND p.estado IN ('reservado','confirmado','utilizado');
+    FROM pasaje
+    WHERE id_vuelo = NEW.id_vuelo
+      AND id_pasaje <> NEW.id_pasaje
+      AND estado IN ('reservado','confirmado','utilizado');
 
     IF v_ocupados + 1 > v_capacidad THEN
       SIGNAL SQLSTATE '45000'
         SET MESSAGE_TEXT = 'No se puede actualizar el pasaje: se supera la capacidad de la aeronave del vuelo.';
     END IF;
+  END IF;
+END$$
 
-    IF NEW.id_asiento IS NOT NULL THEN
-      IF (SELECT matricula_aeronave FROM asiento WHERE id_asiento = NEW.id_asiento) <> v_matricula THEN
-        SIGNAL SQLSTATE '45000'
-          SET MESSAGE_TEXT = 'El asiento asignado no pertenece a la aeronave que opera el vuelo.';
-      END IF;
+-- ------------------------------------------------------------
+-- Mantenimiento automatico de reserva.monto_total ante cambios en
+-- los pasajes y en los servicios contratados.
+-- ------------------------------------------------------------
+CREATE TRIGGER trg_pasaje_ai
+AFTER INSERT ON pasaje
+FOR EACH ROW
+BEGIN
+  UPDATE reserva SET monto_total = fn_total_reserva(NEW.id_reserva)
+  WHERE id_reserva = NEW.id_reserva;
+END$$
+
+CREATE TRIGGER trg_pasaje_au
+AFTER UPDATE ON pasaje
+FOR EACH ROW
+BEGIN
+  UPDATE reserva SET monto_total = fn_total_reserva(NEW.id_reserva)
+  WHERE id_reserva = NEW.id_reserva;
+  IF OLD.id_reserva <> NEW.id_reserva THEN
+    UPDATE reserva SET monto_total = fn_total_reserva(OLD.id_reserva)
+    WHERE id_reserva = OLD.id_reserva;
+  END IF;
+END$$
+
+CREATE TRIGGER trg_pasaje_ad
+AFTER DELETE ON pasaje
+FOR EACH ROW
+BEGIN
+  UPDATE reserva SET monto_total = fn_total_reserva(OLD.id_reserva)
+  WHERE id_reserva = OLD.id_reserva;
+END$$
+
+CREATE TRIGGER trg_ps_ai
+AFTER INSERT ON pasaje_servicio
+FOR EACH ROW
+BEGIN
+  DECLARE v_reserva INT;
+  SELECT id_reserva INTO v_reserva FROM pasaje WHERE id_pasaje = NEW.id_pasaje;
+  UPDATE reserva SET monto_total = fn_total_reserva(v_reserva) WHERE id_reserva = v_reserva;
+END$$
+
+CREATE TRIGGER trg_ps_au
+AFTER UPDATE ON pasaje_servicio
+FOR EACH ROW
+BEGIN
+  DECLARE v_reserva INT;
+  SELECT id_reserva INTO v_reserva FROM pasaje WHERE id_pasaje = NEW.id_pasaje;
+  UPDATE reserva SET monto_total = fn_total_reserva(v_reserva) WHERE id_reserva = v_reserva;
+END$$
+
+CREATE TRIGGER trg_ps_ad
+AFTER DELETE ON pasaje_servicio
+FOR EACH ROW
+BEGIN
+  DECLARE v_reserva INT;
+  SELECT id_reserva INTO v_reserva FROM pasaje WHERE id_pasaje = OLD.id_pasaje;
+  UPDATE reserva SET monto_total = fn_total_reserva(v_reserva) WHERE id_reserva = v_reserva;
+END$$
+
+-- ------------------------------------------------------------
+-- Una reserva solo puede pasar a 'confirmada' si la suma de sus
+-- pagos APROBADOS cubre el monto total.
+-- ------------------------------------------------------------
+CREATE TRIGGER trg_reserva_bu
+BEFORE UPDATE ON reserva
+FOR EACH ROW
+BEGIN
+  DECLARE v_pagado DECIMAL(12,2);
+  IF NEW.estado = 'confirmada' AND OLD.estado <> 'confirmada' THEN
+    SELECT COALESCE(SUM(monto), 0) INTO v_pagado
+    FROM pago
+    WHERE id_reserva = NEW.id_reserva
+      AND estado = 'aprobado';
+
+    IF v_pagado < NEW.monto_total THEN
+      SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'No se puede confirmar la reserva: los pagos aprobados no cubren el monto total.';
     END IF;
   END IF;
 END$$
