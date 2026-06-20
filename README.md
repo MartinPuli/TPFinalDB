@@ -10,12 +10,16 @@ rutas, aeropuertos y empleados** asignados a cada vuelo.
 
 ## Datos de la entrega
 
-> **Materia:** _________________________  **Comisión:** ___________
-> **Docente:** _________________________  **Fecha de entrega:** ___/___/______
-> **Grupo:** 6
-> **Integrantes:** ______________________________________________________
->
-> *(Completar estos datos antes de entregar.)*
+| Campo | Dato |
+|---|---|
+| **Materia** | _(completar)_ |
+| **Comisión** | _(completar)_ |
+| **Docente** | _(completar)_ |
+| **Grupo** | 6 |
+| **Integrantes** | Martín Pulitano _(agregar compañeros del grupo)_ |
+| **Fecha de entrega** | 20/06/2026 |
+
+> Completá los campos marcados con _(completar)_ antes de entregar.
 
 ## Contenido del repositorio
 
