@@ -36,6 +36,7 @@ erDiagram
         int id_ruta FK
         string matricula_aeronave FK
         datetime fecha_hora_salida
+        datetime fecha_hora_llegada
         enum estado
         decimal precio_base
     }
@@ -151,3 +152,6 @@ erDiagram
   (`UNIQUE(id_pasaje)` en `CHECKIN`).
 - Las entidades asociativas **PASAJE_SERVICIO** y **VUELO_EMPLEADO** llevan
   atributos propios (`cantidad`/`precio_aplicado` y `funcion` respectivamente).
+- Un mismo **pasajero** no puede aparecer dos veces en el mismo **vuelo**: la
+  relación Vuelo–Pasaje a través de PASAJE es a lo sumo (1,1) por pasajero y
+  vuelo (se garantiza con `UNIQUE(id_vuelo, id_pasajero)`).

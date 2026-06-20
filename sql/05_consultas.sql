@@ -3,6 +3,7 @@
 -- Dominio: Aerolinea Low Cost (Grupo 6)
 -- Archivo: consultas de ejemplo
 -- Requiere 01_schema.sql + 02_datos_ejemplo.sql
+-- (las consultas 12 y 13 usan vistas de 03_vistas.sql)
 -- ============================================================
 USE aerolinea_lowcost;
 
@@ -145,3 +146,142 @@ WHERE   r.estado = 'confirmada'
   AND   p.estado IN ('confirmado','utilizado')
 GROUP BY v.id_vuelo, v.numero_vuelo
 ORDER BY ingresos_totales DESC;
+
+-- ------------------------------------------------------------
+-- 9) Pasajeros frecuentes: cantidad de pasajes activos por pasajero.
+-- ------------------------------------------------------------
+SELECT  pj.id_pasajero,
+        CONCAT(pj.nombre, ' ', pj.apellido) AS pasajero,
+        COUNT(*) AS pasajes
+FROM    pasaje p
+JOIN    pasajero pj ON pj.id_pasajero = p.id_pasajero
+WHERE   p.estado IN ('reservado','confirmado','utilizado')
+GROUP BY pj.id_pasajero, pasajero
+HAVING  COUNT(*) >= 1
+ORDER BY pasajes DESC, pasajero;
+
+-- ------------------------------------------------------------
+-- 10) Ruta mas vendida (pasajes activos por ruta).
+-- ------------------------------------------------------------
+SELECT  CONCAT(r.cod_aeropuerto_org, '-', r.cod_aeropuerto_dst) AS ruta,
+        COUNT(p.id_pasaje) AS pasajes_vendidos
+FROM    ruta r
+JOIN    vuelo v ON v.id_ruta = r.id_ruta
+LEFT JOIN pasaje p ON p.id_vuelo = v.id_vuelo
+                  AND p.estado IN ('reservado','confirmado','utilizado')
+GROUP BY r.id_ruta, ruta
+ORDER BY pasajes_vendidos DESC;
+
+-- ------------------------------------------------------------
+-- 11) Ranking de servicios adicionales mas contratados
+--     (funcion de ventana RANK()).
+-- ------------------------------------------------------------
+SELECT  s.nombre AS servicio,
+        SUM(ps.cantidad)                         AS unidades,
+        SUM(ps.cantidad * ps.precio_aplicado)    AS recaudado,
+        RANK() OVER (ORDER BY SUM(ps.cantidad) DESC) AS ranking
+FROM    pasaje_servicio ps
+JOIN    servicio_adicional s ON s.id_servicio = ps.id_servicio
+JOIN    pasaje p ON p.id_pasaje = ps.id_pasaje
+WHERE   p.estado <> 'cancelado'
+GROUP BY s.id_servicio, s.nombre
+ORDER BY ranking;
+
+-- ------------------------------------------------------------
+-- 12) Reservas cuyo monto NO esta cubierto por pagos aprobados
+--     (usa la vista v_reserva_estado_pago).
+-- ------------------------------------------------------------
+SELECT  codigo_reserva,
+        estado,
+        monto_total,
+        pagos_aprobados,
+        saldo_pendiente
+FROM    v_reserva_estado_pago
+WHERE   situacion_pago = 'No cubierta'
+ORDER BY saldo_pendiente DESC;
+
+-- ------------------------------------------------------------
+-- 13) Vuelos con ocupacion mayor o igual al 50% (usa v_ocupacion_vuelo).
+-- ------------------------------------------------------------
+SELECT  numero_vuelo,
+        capacidad_maxima,
+        pasajes_activos,
+        porcentaje_ocupacion
+FROM    v_ocupacion_vuelo
+WHERE   porcentaje_ocupacion >= 50
+ORDER BY porcentaje_ocupacion DESC;
+
+-- ------------------------------------------------------------
+-- 14) Pasajeros con pasaje confirmado que aun NO hicieron check-in
+--     para un vuelo (anti-join con NOT EXISTS).
+-- ------------------------------------------------------------
+SELECT  v.numero_vuelo,
+        CONCAT(pj.nombre, ' ', pj.apellido) AS pasajero,
+        p.codigo_ticket
+FROM    pasaje p
+JOIN    vuelo v    ON v.id_vuelo = p.id_vuelo
+JOIN    pasajero pj ON pj.id_pasajero = p.id_pasajero
+WHERE   v.numero_vuelo = 'LC100'
+  AND   p.estado = 'confirmado'
+  AND   NOT EXISTS (SELECT 1 FROM checkin c WHERE c.id_pasaje = p.id_pasaje)
+ORDER BY pasajero;
+
+-- ------------------------------------------------------------
+-- 15) Precio promedio y total de pasajes (confirmados/utilizados) por vuelo.
+-- ------------------------------------------------------------
+SELECT  v.numero_vuelo,
+        COUNT(p.id_pasaje)            AS pasajes,
+        ROUND(AVG(p.precio_base), 2)  AS precio_promedio,
+        SUM(p.precio_base)            AS total_pasajes
+FROM    vuelo v
+JOIN    pasaje p ON p.id_vuelo = v.id_vuelo
+                AND p.estado IN ('confirmado','utilizado')
+GROUP BY v.id_vuelo, v.numero_vuelo
+ORDER BY total_pasajes DESC;
+
+-- ------------------------------------------------------------
+-- 16) Empleados y cantidad de vuelos en los que participan
+--     (LEFT JOIN para incluir a los que no tienen asignaciones).
+-- ------------------------------------------------------------
+SELECT  e.legajo,
+        e.nombre,
+        e.rol,
+        COUNT(ve.id_vuelo) AS vuelos_asignados
+FROM    empleado e
+LEFT JOIN vuelo_empleado ve ON ve.legajo = e.legajo
+GROUP BY e.legajo, e.nombre, e.rol
+ORDER BY vuelos_asignados DESC, e.legajo;
+
+-- ------------------------------------------------------------
+-- 17) Movimiento por aeropuerto: salidas y llegadas programadas
+--     (subconsultas correlacionadas).
+-- ------------------------------------------------------------
+SELECT  a.codigo_iata,
+        a.ciudad,
+        (SELECT COUNT(*) FROM vuelo v JOIN ruta r ON r.id_ruta = v.id_ruta
+          WHERE r.cod_aeropuerto_org = a.codigo_iata) AS salidas,
+        (SELECT COUNT(*) FROM vuelo v JOIN ruta r ON r.id_ruta = v.id_ruta
+          WHERE r.cod_aeropuerto_dst = a.codigo_iata) AS llegadas
+FROM    aeropuerto a
+ORDER BY salidas DESC, llegadas DESC, a.codigo_iata;
+
+-- ------------------------------------------------------------
+-- 18) Ranking de vuelos por ocupacion usando CTE + funcion de ventana.
+-- ------------------------------------------------------------
+WITH ocupacion AS (
+  SELECT  v.numero_vuelo,
+          COUNT(p.id_pasaje)  AS activos,
+          an.capacidad_maxima AS capacidad
+  FROM    vuelo v
+  JOIN    aeronave an ON an.matricula = v.matricula_aeronave
+  LEFT JOIN pasaje p ON p.id_vuelo = v.id_vuelo
+                    AND p.estado IN ('reservado','confirmado','utilizado')
+  GROUP BY v.id_vuelo, v.numero_vuelo, an.capacidad_maxima
+)
+SELECT  numero_vuelo,
+        activos,
+        capacidad,
+        ROUND(100 * activos / capacidad, 1) AS porcentaje_ocupacion,
+        RANK() OVER (ORDER BY activos / capacidad DESC) AS ranking
+FROM    ocupacion
+ORDER BY ranking, numero_vuelo;
