@@ -38,6 +38,7 @@ Este repositorio cubre los dos trabajos prácticos obligatorios:
 | [`docs/03_modelo_relacional.md`](docs/03_modelo_relacional.md) | Pasaje a tablas: claves primarias, foráneas, índices y reglas. |
 | [`docs/04_normalizacion.md`](docs/04_normalizacion.md) | Análisis de normalización (hasta FNBC) tabla por tabla. |
 | [`docs/05_diccionario_datos.md`](docs/05_diccionario_datos.md) | Diccionario de datos: cada tabla, columna y objeto del esquema. |
+| [`docs/DER_aerolinea.drawio`](docs/DER_aerolinea.drawio) | Diagrama entidad-relación **editable** (draw.io / diagrams.net). También en [`.png`](docs/DER_aerolinea.png) y [`.svg`](docs/DER_aerolinea.svg). |
 
 **Scripts SQL** (ejecutar en este orden)
 

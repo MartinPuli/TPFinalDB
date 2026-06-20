@@ -36,6 +36,7 @@ erDiagram
         int id_ruta FK
         string matricula_aeronave FK
         datetime fecha_hora_salida
+        datetime fecha_hora_llegada
         enum estado
         decimal precio_base
     }
